@@ -59,3 +59,52 @@ Checked by counting duplicate keys in each file.
 | `product_category_name_translation` | one Portuguese category and its English name | `product_category_name` |
 
 Joining `orders` to `order_items` gives one row per item, not per order. Sum item prices before comparing with order-level totals.
+
+## Cleaning rules: olist_orders
+
+Rules for `olist_orders_dataset.csv` (99,441 rows), decided after profiling the file. The counts are from the downloaded dataset.
+
+Principle: reject data that is broken, not data that is bad news. A late delivery is a real fact about the business and stays in.
+
+### Converted
+
+| Column | Rule | Why |
+|---|---|---|
+| All 5 timestamp columns | Parse `YYYY-MM-DD HH:MM:SS`, label as `America/Sao_Paulo`, convert to UTC | The source has no time zone. Olist is a Brazilian company, so the values are São Paulo local time. A zone name is used, not a fixed `-03:00`, because Brazil had summer time in 2016–2018 |
+| `order_status` | Trim spaces, lowercase | So the same status is always written the same way |
+
+### Kept, with a warning in the log
+
+These rows look odd but are not provably wrong, so the order stays and the run logs how many there are.
+
+| Case | Today | Decision | Why |
+|---|---|---|---|
+| `delivered` with no `order_delivered_customer_date` | 8 | Keep, date stays empty | The order and its revenue are real. Delivery-time metrics skip rows with no delivery date |
+| `delivered` with no `order_approved_at` | 14 | Keep, date stays empty | Same reason, and the approval time is not used for the main metrics |
+| `canceled` that has a delivery date | 6 | Keep | It can be a real case (delivered, then canceled and refunded) and cannot be checked from this file |
+| Carrier pickup before purchase | 166 | Keep | The pickup time likely comes from another system's clock and is not used for the main metrics |
+
+An empty timestamp is normal for orders that have not reached that step yet (for example `shipped` has no delivery date). Empty stays empty; it is never replaced with a made-up date.
+
+### Rejected
+
+A rejected row is not written to the clean file. It goes to the reject file with the reason.
+
+| Case | Today |
+|---|---|
+| Empty `order_id` or `customer_id` | 0 |
+| Empty `order_purchase_timestamp` or `order_estimated_delivery_date` | 0 |
+| A timestamp that cannot be parsed | 0 |
+| `order_status` is not one of the 8 known values: `created`, `approved`, `invoiced`, `processing`, `shipped`, `delivered`, `canceled`, `unavailable` | 0 |
+| Delivered to the customer before the purchase time | 0 |
+| Duplicate `order_id`: the first row is kept, later ones are rejected | 0 |
+
+Known limit of the duplicate rule: the first row in the file is not always the correct one. A later version may keep the most recent row instead.
+
+Reject file columns: `line` (line number in the source CSV), `order_id`, `reason`.
+
+### Checks on every run
+
+- rows read = rows kept + rows rejected
+- `order_id` is unique in the clean file
+- the clean file is not empty

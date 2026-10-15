@@ -1,5 +1,4 @@
 import pytest
-
 from pipeline.transform import normalize_status
 
 
